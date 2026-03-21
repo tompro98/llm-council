@@ -14,11 +14,13 @@ from .council import run_full_council, generate_conversation_title, stage1_colle
 
 app = FastAPI(title="LLM Council API")
 
-# Enable CORS for local development
+import os
+
+# Enable CORS - allow all origins (Railway frontend + local dev)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -192,6 +194,51 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             "Connection": "keep-alive",
         }
     )
+
+
+class AskRequest(BaseModel):
+    """Simple one-shot request for agent use."""
+    question: str
+    source: str = "agent"  # who is asking (e.g. "eva", "nova", "riley")
+
+
+@app.post("/api/ask")
+async def ask(request: AskRequest):
+    """
+    One-shot agent endpoint: submit a question, get the council's final answer.
+    Automatically creates a conversation, runs all 3 stages, returns final answer.
+    No session management needed for callers.
+    """
+    # Create a conversation
+    conversation_id = str(uuid.uuid4())
+    storage.create_conversation(conversation_id)
+
+    # Set title from source
+    title = f"[{request.source}] {request.question[:60]}{'...' if len(request.question) > 60 else ''}"
+    storage.update_conversation_title(conversation_id, title)
+
+    # Add user message
+    storage.add_user_message(conversation_id, request.question)
+
+    # Run the 3-stage council process
+    stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
+        request.question
+    )
+
+    # Save to storage (visible in frontend)
+    storage.add_assistant_message(
+        conversation_id,
+        stage1_results,
+        stage2_results,
+        stage3_result
+    )
+
+    return {
+        "conversation_id": conversation_id,
+        "question": request.question,
+        "answer": stage3_result,
+        "metadata": metadata
+    }
 
 
 if __name__ == "__main__":
