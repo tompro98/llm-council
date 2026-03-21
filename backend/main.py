@@ -1,6 +1,7 @@
 """FastAPI backend for LLM Council."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security
+from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -8,13 +9,23 @@ from typing import List, Dict, Any
 import uuid
 import json
 import asyncio
+import os
 
 from . import storage
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
 
 app = FastAPI(title="LLM Council API")
 
-import os
+# API Key Auth
+COUNCIL_API_KEY = os.environ.get("COUNCIL_API_KEY", "")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verify_api_key(api_key: str = Security(api_key_header)):
+    """Require X-API-Key header on all non-health endpoints."""
+    if not COUNCIL_API_KEY:
+        return  # no key configured, open access (dev mode)
+    if api_key != COUNCIL_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 # Enable CORS - allow all origins (Railway frontend + local dev)
 app.add_middleware(
@@ -58,13 +69,13 @@ async def root():
     return {"status": "ok", "service": "LLM Council API"}
 
 
-@app.get("/api/conversations", response_model=List[ConversationMetadata])
+@app.get("/api/conversations", response_model=List[ConversationMetadata], dependencies=[Security(verify_api_key)])
 async def list_conversations():
     """List all conversations (metadata only)."""
     return storage.list_conversations()
 
 
-@app.post("/api/conversations", response_model=Conversation)
+@app.post("/api/conversations", response_model=Conversation, dependencies=[Security(verify_api_key)])
 async def create_conversation(request: CreateConversationRequest):
     """Create a new conversation."""
     conversation_id = str(uuid.uuid4())
@@ -72,7 +83,7 @@ async def create_conversation(request: CreateConversationRequest):
     return conversation
 
 
-@app.get("/api/conversations/{conversation_id}", response_model=Conversation)
+@app.get("/api/conversations/{conversation_id}", response_model=Conversation, dependencies=[Security(verify_api_key)])
 async def get_conversation(conversation_id: str):
     """Get a specific conversation with all its messages."""
     conversation = storage.get_conversation(conversation_id)
@@ -81,7 +92,7 @@ async def get_conversation(conversation_id: str):
     return conversation
 
 
-@app.post("/api/conversations/{conversation_id}/message")
+@app.post("/api/conversations/{conversation_id}/message", dependencies=[Security(verify_api_key)])
 async def send_message(conversation_id: str, request: SendMessageRequest):
     """
     Send a message and run the 3-stage council process.
@@ -125,7 +136,7 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     }
 
 
-@app.post("/api/conversations/{conversation_id}/message/stream")
+@app.post("/api/conversations/{conversation_id}/message/stream", dependencies=[Security(verify_api_key)])
 async def send_message_stream(conversation_id: str, request: SendMessageRequest):
     """
     Send a message and stream the 3-stage council process.
@@ -202,7 +213,9 @@ class AskRequest(BaseModel):
     source: str = "agent"  # who is asking (e.g. "eva", "nova", "riley")
 
 
-@app.post("/api/ask")
+@app.post("/api/ask", dependencies=[Security(verify_api_key)])
+
+
 async def ask(request: AskRequest):
     """
     One-shot agent endpoint: submit a question, get the council's final answer.
