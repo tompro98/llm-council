@@ -214,8 +214,6 @@ class AskRequest(BaseModel):
 
 
 @app.post("/api/ask", dependencies=[Security(verify_api_key)])
-
-
 async def ask(request: AskRequest):
     """
     One-shot agent endpoint: submit a question, get the council's final answer.
