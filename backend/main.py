@@ -13,6 +13,7 @@ import os
 
 from . import storage
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from .supabase_sync import save_run_to_supabase
 
 app = FastAPI(title="LLM Council API")
 
@@ -127,6 +128,18 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         stage3_result
     )
 
+    # Sync to Supabase (persistent, non-fatal)
+    await save_run_to_supabase(
+        conversation_id=conversation_id,
+        source="frontend",
+        question=request.content,
+        title=storage.get_conversation(conversation_id).get("title"),
+        stage1=stage1_results,
+        stage2=stage2_results,
+        stage3=stage3_result,
+        metadata=metadata,
+    )
+
     # Return the complete response with metadata
     return {
         "stage1": stage1_results,
@@ -236,12 +249,24 @@ async def ask(request: AskRequest):
         request.question
     )
 
-    # Save to storage (visible in frontend)
+    # Save to local JSON storage (visible in frontend)
     storage.add_assistant_message(
         conversation_id,
         stage1_results,
         stage2_results,
         stage3_result
+    )
+
+    # Sync to Supabase (persistent, non-fatal)
+    await save_run_to_supabase(
+        conversation_id=conversation_id,
+        source=request.source,
+        question=request.question,
+        title=title,
+        stage1=stage1_results,
+        stage2=stage2_results,
+        stage3=stage3_result,
+        metadata=metadata,
     )
 
     return {
